@@ -37,10 +37,10 @@ jobs:
         env: 
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         run: |
-          docker run -d --name test -e EULA=TRUE -e TYPE=PAPER -e VERSION=26.1 -e MEMORY=1G ${{ env.IMAGE }}
+          docker run -d --name test -e EULA=TRUE -e TYPE=PAPER -e VERSION=1.21.10 -e MEMORY=2G ${{ env.IMAGE }}
           HEALTHY=0
 
-          for i in $(seq 1 12); do 
+          for i in $(seq 1 24); do 
             sleep 10
             if docker logs test 2>&1 | grep -q 'Done '; then
               HEALTHY=1
