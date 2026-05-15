@@ -1,0 +1,131 @@
+---
+- name: Configure minecraft on EC2
+  hosts: minecraft
+  become: true
+
+  vars_files:
+    - vars.yml
+
+  tasks:
+    - name: Install Docker prerequisites
+      apt:
+        name:
+          - ca-certificates
+          - curl
+          - gnupg
+        state: present
+        update_cache: true
+
+    - name: Add Docker GPG key
+      shell: |
+        install -m 0755 -d /etc/apt/keyrings
+        curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+        chmod a+r /etc/apt/keyrings/docker.asc
+      args:
+        creates: /etc/apt/keyrings/docker.asc
+
+    - name: Add Docker apt repository
+      shell: |
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" > /etc/apt/sources.list.d/docker.list
+      args:
+        creates: /etc/apt/sources.list.d/docker.list
+
+    - name: Install Docker Engine
+      apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-compose-plugin
+        state: present
+        update_cache: true
+
+    - name: Ensure Docker is running
+      service:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: Create Docker Compose directory
+      file:
+        path: /opt/minecraft
+        state: directory
+        mode: "0755"
+
+    - name: Write Docker Compose file
+      copy:
+        dest: /opt/minecraft/docker-compose.yml
+        content: |
+          services:
+            mc:
+              # change this image to change versions
+              image: "{{ ecr_registry }}:{{ image_tag }}"
+              restart: unless-stopped
+              tty: true
+              stdin_open: true
+              ports:
+              - "25565:25565"
+              environment:
+                  EULA: "TRUE"
+                  MOTD: "Gunnar Chain -CS312"
+                  VERSION: "1.21.4"
+                  MEMORY: "2G"
+                  TYPE: "PAPER"
+              volumes:
+                # attach the relative directory 'data' to the container's /data path
+                - /home/ubuntu/mc-data:/data
+
+    - name: Install AWS
+      apt:
+        name: awscli
+        state: present
+
+    - name: Install Python Docker
+      apt:
+        name: python3-docker
+        state: present
+
+    - name: Get ECR login password
+      command: aws ecr get-login-password --region us-east-1
+      register: ecr_password
+      changed_when: false
+
+    - name: Docker login to ECR
+      community.docker.docker_login:
+        registry_url: "{{ ecr_registry }}"
+        username: AWS
+        password: "{{ ecr_password.stdout }}"
+        reauthorize: true
+
+    - name: Create world directory
+      file:
+          path: /home/ubuntu/mc-data
+          state: directory
+          owner: ubuntu
+          group: ubuntu
+          mode: "0755"
+
+    - name: Restore world from S3
+      command: aws s3 sync s3://{{ backup_bucket }}/world/ /home/ubuntu/mc-data/
+      register: s3_restore
+      changed_when: "'download' in s3_restore.stdout"
+
+    - name: Fix ownership on restored world data
+      file:
+        path: /home/ubuntu/mc-data
+        state: directory
+        owner: "1000"
+        group: "1000"
+        recurse: yes
+
+    - name: Start Minecraft stack
+      community.docker.docker_compose_v2:
+        project_src: /opt/minecraft
+        state: present
+
+    - name: Schedule Minecraft S3 backups every 10 minutes
+      ansible.builtin.cron:
+        name: "minecraft world backup"
+        minute: "*/10"
+        user: root
+        job: "/usr/bin/aws s3 sync /home/ubuntu/mc-data/ s3://{{ backup_bucket }}/world/"
