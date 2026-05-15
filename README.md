@@ -1,3 +1,4 @@
+```
 .
 |-- README.md                         <- this file
 |-- main.tf                           <- providers, VPC data source, SGs, EC2s,
@@ -11,3 +12,4 @@
 `-- .github/
     `-- workflows/
         `-- build-push.yml           <- tag-triggered: pull, smoke test, push
+```
