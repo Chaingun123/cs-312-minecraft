@@ -1,0 +1,63 @@
+name: Push minecraft image to ECR
+
+on:
+  push:
+    tags:
+      - 'mc-*'
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: cs312-minecraft
+  IMAGE: itzg/minecraft-server:java21
+
+jobs:
+  build-test-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Pull Minecraft image
+        run: docker pull ${{ env.IMAGE }}
+
+      - name: Smoke test
+        env: 
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          docker run -d --name test -e EULA=TRUE -e TYPE=PAPER -e VERSION=26.1 -e MEMORY=1G ${{ env.IMAGE }}
+          HEALTHY=0
+
+          for i in $(seq 1 12); do 
+            sleep 10
+            if docker logs test 2>&1 | grep -q 'Done '; then
+              HEALTHY=1
+              break
+            fi
+          done
+          docker stop test
+          if [ "$HEALTHY" != "1" ]; then
+            echo "Smoke test failed"
+            exit 1
+          fi
+          echo "Smoke test passed"
+
+      - name: Tag and push to ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          docker tag ${{ env.IMAGE }} \
+            $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ github.ref_name }}
+          docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ github.ref_name }}
